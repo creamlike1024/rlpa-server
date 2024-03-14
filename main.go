@@ -2,33 +2,65 @@ package main
 
 import (
 	"flag"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+	"fmt"
+	"log/slog"
 	"net"
+	"strings"
 )
+
+func init() {
+	Credentials = make(map[string]string)
+}
 
 func main() {
 	debug := flag.Bool("debug", false, "sets log level to debug")
+	showHelp := flag.Bool("help", false, "show help info")
 	flag.Parse()
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if *showHelp {
+		help := `rlpa-server
+
+Arguments:
+	-debug	enable debug output
+	-help	show help info
+
+Environment Variables:
+	LPAC_FOLDER	lpac binary folder name
+	SOCKET_PORT	rlpa socket port
+	API_PORT	http management api port
+`
+		print(help)
+		return
+	}
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 	if *debug {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
+	err := InitConfig()
+	if err != nil {
+		panic(err)
 	}
 
-	const addr = "0.0.0.0:1888"
+	go HttpServer()
+
+	addr := fmt.Sprint("0.0.0.0:", CFG.SocketPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatal().Err(err)
+		panic(err)
 	}
 
-	log.Info().Msg("Start listening on tcp://" + addr)
-	defer listener.Close()
+	slog.Info("Start listening on tcp://" + addr)
+	defer func(listener net.Listener) {
+		errClose := listener.Close()
+		if errClose != nil {
+			slog.Error("Failed to close socket listener")
+		}
+	}(listener)
 
 	for {
 		conn, err := listener.Accept()
-		log.Info().Msgf("Accepted %s", conn.RemoteAddr().String())
+		slog.Info("Accepted " + conn.RemoteAddr().String())
 		if err != nil {
-			log.Err(err)
+			slog.Error(err.Error())
 			continue
 		}
 
@@ -38,15 +70,18 @@ func main() {
 
 func handleConnection(conn net.Conn) {
 	client := NewRLPAClient(conn)
-
-	client.MessageBox("Welcome, " + client.Socket.RemoteAddr().String())
+	Clients = append(Clients, client)
 
 	for {
 		// 接受 Packet
 		err := client.Packet.Recv(conn)
 		if err != nil {
-			log.Err(err).Str("client", client.Socket.RemoteAddr().String())
-			client.Close()
+			if strings.Contains(err.Error(), "EOF") {
+				client.Close(ResultClientDisconnect)
+			} else {
+				slog.Error("packet recv: "+err.Error(), "client", client.RemoteAddr())
+				client.Close(ResultError)
+			}
 			return
 		}
 		if !client.Packet.IsFinished() {
@@ -55,11 +90,11 @@ func handleConnection(conn net.Conn) {
 		// 处理
 		err = client.ProcessPacket()
 		if err != nil {
-			log.Err(err).Str("client", client.Socket.RemoteAddr().String())
-			client.Close()
+			slog.Error("packet process: "+err.Error(), "client", client.RemoteAddr())
+			client.Close(ResultError)
 			return
 		}
 		// 重置
-		client.Packet = NewRLPAPacket(0, "")
+		client.Packet = NewRLPAPacket(0, []byte{})
 	}
 }

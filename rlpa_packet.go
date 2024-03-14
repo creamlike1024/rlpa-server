@@ -4,33 +4,34 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/rs/zerolog/log"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 )
 
 const (
-	TAG_MESSAGEBOX           = 0x00
-	TAG_MANAGEMNT            = 0x01
-	TAG_DOWNLOAD_PROFILE     = 0x02
-	TAG_PROCESS_NOTIFICATION = 0x03
+	TagMessagebox          = 0x00
+	TagManagement          = 0x01
+	TagDownloadProfile     = 0x02
+	TagProcessNotification = 0x03
 
-	TAG_REBOOT      = 0xFB
-	TAG_CLOSE       = 0xFC
-	TAG_APDU_LOCK   = 0xFD
-	TAG_APDU        = 0xFE
-	TAG_APDU_UNLOCK = 0xFF
+	TagReboot     = 0xFB
+	TagClose      = 0xFC
+	TagApduLock   = 0xFD
+	TagApdu       = 0xFE
+	TagApduUnlock = 0xFF
 )
 
 type RLPAPacket struct {
 	Tag         uint8
-	Value       string
+	Value       []byte
 	State       int
 	NextReadLen uint16
 	Buffer      bytes.Buffer
 }
 
-func NewRLPAPacket(tag uint8, value string) RLPAPacket {
+func NewRLPAPacket(tag uint8, value []byte) RLPAPacket {
 	return RLPAPacket{
 		Tag:         tag,
 		Value:       value,
@@ -61,7 +62,7 @@ func (p *RLPAPacket) Pack() ([]byte, error) {
 	}
 
 	// 写入value内容
-	buf.WriteString(p.Value)
+	buf.Write(p.Value)
 
 	return buf.Bytes(), nil
 }
@@ -73,8 +74,11 @@ func (p *RLPAPacket) Recv(conn net.Conn) error {
 	}
 	// 设定 buf 长度即可读取指定长度
 	buf := make([]byte, p.NextReadLen)
-	conn.Read(buf)
-	log.Debug().Str("client", conn.RemoteAddr().String()).Msg("Socket Read buffer: " + string(buf))
+	_, err := conn.Read(buf)
+	if err != nil {
+		return err
+	}
+	slog.Debug(fmt.Sprint("Socket Read buffer: ", buf), "client", conn.RemoteAddr().String())
 	// 长度为 0 说明读取失败
 	if len(buf) == 0 {
 		return errors.New("read buffer length 0")
@@ -83,21 +87,27 @@ func (p *RLPAPacket) Recv(conn net.Conn) error {
 	p.NextReadLen -= uint16(len(buf))
 	p.Buffer.Write(buf)
 
-	unpackTag := func(reader io.Reader) uint8 {
+	unpackTag := func(reader io.Reader) (uint8, error) {
 		// unpack('C', $this->_buffer)[1]
 		var tag uint8
 		// 无符号字符不区分大端序小端序
 		// 读取第一个字节（Tag）
-		binary.Read(reader, binary.LittleEndian, &tag)
-		return tag
+		errBinaryRead := binary.Read(reader, binary.LittleEndian, &tag)
+		if errBinaryRead != nil {
+			return 0, errBinaryRead
+		}
+		return tag, nil
 	}
 
-	unpackNextReadLen := func(reader io.Reader) uint16 {
+	unpackNextReadLen := func(reader io.Reader) (uint16, error) {
 		// unpack('v', $this->_buffer)[1]
 		// 'v' 为 16 位无符号小端序整数
 		var nextReadLen uint16
-		binary.Read(reader, binary.LittleEndian, &nextReadLen)
-		return nextReadLen
+		errBinaryRead := binary.Read(reader, binary.LittleEndian, &nextReadLen)
+		if errBinaryRead != nil {
+			return 0, errBinaryRead
+		}
+		return nextReadLen, nil
 	}
 
 	// State 0 初始阶段，读 tag
@@ -108,18 +118,24 @@ func (p *RLPAPacket) Recv(conn net.Conn) error {
 	if p.NextReadLen == 0 {
 		switch p.State {
 		case 0:
-			p.Tag = unpackTag(&p.Buffer)
-			log.Debug().Str("client", conn.RemoteAddr().String()).Uint8("Tag", p.Tag).Msgf("Unpacked Tag: %d", p.Tag)
+			p.Tag, err = unpackTag(&p.Buffer)
+			if err != nil {
+				return err
+			}
+			slog.Debug(fmt.Sprint("Unpacked Tag: ", p.Tag), "client", conn.RemoteAddr().String())
 			p.State = 1
-			log.Debug().Str("client", conn.RemoteAddr().String()).Int("State", p.State).Msgf("Switch to STATE: %d", p.State)
+			slog.Debug(fmt.Sprint("Switch to STATE: ", p.State), "client", conn.RemoteAddr().String())
 			p.NextReadLen = 2
 			p.Buffer.Reset()
 			break
 		case 1:
 			p.State = 2
-			log.Debug().Str("client", conn.RemoteAddr().String()).Int("State", p.State).Msgf("Switch to STATE: %d", p.State)
-			p.NextReadLen = unpackNextReadLen(&p.Buffer)
-			log.Debug().Str("client", conn.RemoteAddr().String()).Uint16("nextReadLen", p.NextReadLen).Msgf("Unpacked nextReadLen: %d", p.NextReadLen)
+			slog.Debug(fmt.Sprint("Switch to STATE: ", p.State), "client", conn.RemoteAddr().String())
+			p.NextReadLen, err = unpackNextReadLen(&p.Buffer)
+			if err != nil {
+				return err
+			}
+			slog.Debug(fmt.Sprint("Unpacked nextReadLen: ", p.NextReadLen), "client", conn.RemoteAddr().String())
 			// NextReadLen 太长
 			if p.NextReadLen >= (512 - 3) {
 				return errors.New("next read len too long (>= 519)")
@@ -128,12 +144,12 @@ func (p *RLPAPacket) Recv(conn net.Conn) error {
 			// 剩余读取长度为 0，进入 State 3 结束
 			if p.NextReadLen == 0 {
 				p.State = 3
-				p.Value = ""
+				p.Value = []byte{}
 			}
 			break
 		case 2:
 			p.State = 3
-			p.Value = p.Buffer.String()
+			p.Value = p.Buffer.Bytes()
 			p.Buffer.Reset()
 			break
 		}
