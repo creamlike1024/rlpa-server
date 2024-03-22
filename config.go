@@ -11,38 +11,26 @@ import (
 )
 
 type Config struct {
-	SocketPort    uint16
-	APIPort       uint16
-	LpacExeName   string
-	LpacPath      string
-	APDUInterface string
-	HTTPInterface string
+	SocketPort  uint16
+	APIPort     uint16
+	LpacExeName string
+	LpacPath    string
 }
 
 var CFG Config
 
 func InitConfig() error {
-	const apduInterface = "libapduinterface_stdio"
-	const httpInterface = "libhttpinterface_curl"
 	switch runtime.GOOS {
 	case "windows":
 		CFG.LpacExeName = "lpac.exe"
-		CFG.APDUInterface = apduInterface + ".dll"
-		CFG.HTTPInterface = httpInterface + ".dll"
-	case "darwin":
-		CFG.LpacExeName = "lpac"
-		CFG.APDUInterface = apduInterface + ".dylib"
-		CFG.HTTPInterface = httpInterface + ".dylib"
 	default:
 		CFG.LpacExeName = "lpac"
-		CFG.APDUInterface = apduInterface + ".so"
-		CFG.HTTPInterface = httpInterface + ".so"
 	}
 	pwd, err := os.Getwd()
 	if err != nil {
 		return errors.New(fmt.Sprint("Failed to get pwd: ", err))
 	}
-	CFG.LpacPath = filepath.Join(pwd, "lpac", CFG.LpacExeName)
+	CFG.LpacPath = filepath.Join(pwd, CFG.LpacExeName)
 	socketPort := strings.TrimSpace(os.Getenv("SOCKET_PORT"))
 	if socketPort == "" {
 		CFG.SocketPort = 1888

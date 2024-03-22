@@ -25,14 +25,17 @@ func HttpServer() {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO
 	fmt.Fprintf(w, "rlpa-server\n")
 }
 
 func manifestHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO
 	fmt.Fprintf(w, "manifest\n")
 }
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO
 	id := r.PathValue("id")
 	if verify(id, r.Header.Get("Password")) {
 		w.WriteHeader(http.StatusOK)
@@ -44,6 +47,7 @@ func infoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func connectHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO
 	id := r.PathValue("id")
 	passwd := r.Header.Get("Password")
 	if verify(id, passwd) {
@@ -51,11 +55,6 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprintf(w, "rlpa client disconnected")
-			return
-		}
-		if c.WorkMode != ShellMode {
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "rlpa client not in shell mode")
 			return
 		}
 		if c.APILocked {
@@ -77,6 +76,7 @@ func disconnectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func keepaliveHandler(w http.ResponseWriter, r *http.Request) {
+	// TODO
 	id := r.PathValue("id")
 	passwd := r.Header.Get("Password")
 	if verify(id, passwd) {
@@ -109,11 +109,6 @@ func shellHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "rlpa client disconnected")
 			return
 		}
-		if c.WorkMode != ShellMode {
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "rlpa client not in shell mode")
-			return
-		}
 		// decode json body
 		var payload ShellRequest
 		err = json.NewDecoder(r.Body).Decode(&payload)
@@ -135,7 +130,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			c.DebugLog("command " + payload.Command)
-			err = c.processOpenLpac(strings.Split(strings.TrimSpace(payload.Command), " "))
+			err = c.processOpenLpac(strings.Split(strings.TrimSpace(payload.Command), " ")...)
 			if err != nil {
 				w.WriteHeader(http.StatusBadGateway)
 				fmt.Fprintf(w, "failed to open lpac")

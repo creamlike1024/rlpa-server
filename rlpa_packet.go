@@ -72,13 +72,31 @@ func (p *RLPAPacket) Recv(conn net.Conn) error {
 	if p.IsFinished() {
 		return nil
 	}
-	// 设定 buf 长度即可读取指定长度
-	buf := make([]byte, p.NextReadLen)
-	_, err := conn.Read(buf)
+	// 读取至 nextReadLen 长度
+	readExactly := func(conn net.Conn, nextReadLen int) ([]byte, error) {
+		buffer := make([]byte, nextReadLen)
+		totalRead := 0
+
+		for totalRead < nextReadLen {
+			n, err := conn.Read(buffer[totalRead:])
+			if err != nil {
+				if err == io.EOF {
+					// 对面关闭连接，读到 EOF
+					return buffer[:totalRead], io.ErrUnexpectedEOF
+				}
+				return buffer[:totalRead], err
+			}
+			totalRead += n
+			slog.Debug(fmt.Sprint("Socket Read buffer: ", buffer[:totalRead]), "client", conn.RemoteAddr().String())
+		}
+		return buffer, nil
+	}
+	buf, err := readExactly(conn, int(p.NextReadLen))
+
 	if err != nil {
 		return err
 	}
-	slog.Debug(fmt.Sprint("Socket Read buffer: ", buf), "client", conn.RemoteAddr().String())
+
 	// 长度为 0 说明读取失败
 	if len(buf) == 0 {
 		return errors.New("read buffer length 0")

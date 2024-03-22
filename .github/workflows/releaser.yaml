@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [ linux, windows, darwin, freebsd ]
+        goarch: [ "386", arm, amd64, arm64, mipsle ]
+        exclude:
+          - goarch: "386"
+            goos: darwin
+          - goarch: mipsle
+            goos: windows
+          - goarch: mipsle
+            goos: darwin
+          - goarch: mipsle
+            goos: freebsd
+          - goarch: arm
+            goos: windows
+          - goarch: arm
+            goos: darwin
+          - goarch: arm
+            goos: freebsd
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wangyoucao577/go-release-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          ldflags: "-s -w"

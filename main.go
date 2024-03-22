@@ -31,7 +31,7 @@ Environment Variables:
 		print(help)
 		return
 	}
-	slog.SetLogLoggerLevel(slog.LevelDebug)
+	slog.SetLogLoggerLevel(slog.LevelInfo)
 	if *debug {
 		slog.SetLogLoggerLevel(slog.LevelDebug)
 	}
@@ -70,7 +70,6 @@ Environment Variables:
 
 func handleConnection(conn net.Conn) {
 	client := NewRLPAClient(conn)
-	Clients = append(Clients, client)
 
 	for {
 		// 接受 Packet

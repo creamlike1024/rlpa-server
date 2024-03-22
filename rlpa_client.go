@@ -20,19 +20,12 @@ const keepaliveDuration time.Duration = 60 * time.Second
 const letters = "abcdefghijkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXY345679"
 const digits = "0123456789"
 
-const (
-	WaitingMode             = 0
-	DownloadMode            = 1
-	ProcessNotificationMode = 2
-	ShellMode               = 3
-)
-
 var Credentials map[string]string
 
 type RLPAClient struct {
 	IsClosing       bool
 	ID              string
-	WorkMode        int
+	WorkMode        RLPAWorkMode
 	Socket          net.Conn
 	Packet          RLPAPacket
 	CMD             *exec.Cmd
@@ -45,7 +38,7 @@ type RLPAClient struct {
 	KeepAliveTimer  *time.Timer
 }
 
-var Clients []*RLPAClient
+var APIClients []*RLPAClient
 
 func NewRLPAClient(conn net.Conn) *RLPAClient {
 	return &RLPAClient{
@@ -57,9 +50,9 @@ func NewRLPAClient(conn net.Conn) *RLPAClient {
 
 func (c *RLPAClient) GenCredential() string {
 	for {
-		id := generateID(2)
+		id := generateID(4)
 		if _, exists := Credentials[id]; !exists {
-			passwd := generatePasswd(2)
+			passwd := generatePasswd(4)
 			Credentials[id] = passwd
 			c.ID = id
 			return passwd
@@ -86,7 +79,7 @@ func generatePasswd(n int) string {
 }
 
 func FindClient(id string) (*RLPAClient, error) {
-	for _, c := range Clients {
+	for _, c := range APIClients {
 		if c.ID == id {
 			return c, nil
 		}
@@ -158,43 +151,23 @@ func (c *RLPAClient) ProcessPacket() error {
 		return nil
 	}
 
-	if c.WorkMode != WaitingMode {
+	// 已经在工作模式中
+	if c.WorkMode != nil {
 		return nil
 	}
 
 	switch c.Packet.Tag {
 	case TagManagement:
-		// TODO: shellMode
-		c.WorkMode = ShellMode
-		passwd := c.GenCredential()
-		err := c.MessageBox(fmt.Sprintf("ManageID: %s\nPassword: %s", c.ID, passwd))
-		if err != nil {
-			c.ErrLog("Failed to send manageID and password")
-			return err
-		}
+		c.WorkMode = new(ShellWorkMode)
 		c.InfoLog("Enter ShellMode")
 		break
 	case TagProcessNotification:
-		// TODO: processNotificationMode
-		c.WorkMode = ProcessNotificationMode
+		c.WorkMode = new(ProcessNotificationWorkMode)
 		c.InfoLog("Enter Process Notification Mode")
-		err := c.MessageBox("Unimplemented command.")
-		if err != nil {
-			return err
-		}
-		c.ErrLog("process notification mode unimplemented")
-		return errors.New("unimplemented command")
 		break
 	case TagDownloadProfile:
-		// TODO: downloadProfileMode
-		c.WorkMode = TagDownloadProfile
+		c.WorkMode = new(DownloadWorkMode)
 		c.InfoLog("Enter Download Profile Mode")
-		err := c.MessageBox("Unimplemented command.")
-		if err != nil {
-			return err
-		}
-		c.ErrLog("download profile mode unimplemented")
-		return errors.New("unimplemented command")
 		break
 	default:
 		err := c.MessageBox("Unimplemented command.")
@@ -203,8 +176,12 @@ func (c *RLPAClient) ProcessPacket() error {
 		}
 		c.ErrLog("unimplemented mode")
 		return errors.New("unimplemented command")
-		break
 	}
+	if c.WorkMode == nil {
+		return errors.New("no workmode selected")
+	}
+
+	c.WorkMode.Start(c)
 	return nil
 }
 
@@ -213,6 +190,18 @@ func (c *RLPAClient) Close(result int) {
 		return
 	}
 	c.IsClosing = true
+	_, errFound := FindClient(c.ID)
+	if errFound == nil {
+		// 如果连接了 API，移除凭据
+		delete(Credentials, c.ID)
+		var newAPIClients []*RLPAClient
+		for _, client := range APIClients {
+			if c.ID != client.ID {
+				newAPIClients = append(newAPIClients, client)
+			}
+		}
+		APIClients = newAPIClients
+	}
 	if c.CMD != nil {
 		if c.CMD.ProcessState == nil {
 			err := c.CMD.Process.Kill()
@@ -221,21 +210,19 @@ func (c *RLPAClient) Close(result int) {
 			}
 		}
 	}
-
-	delete(Credentials, c.ID)
-	if c.ResponseWaiting {
-		switch result {
-		case ResultFinished:
-			c.ResponseChan <- []byte("OK")
-			break
-		case ResultClientDisconnect:
-			c.ResponseChan <- []byte("client disconnected")
-			break
-		case ResultError:
-			c.ResponseChan <- []byte("lpac error")
-			break
-		}
-	}
+	// if c.ResponseWaiting {
+	// 	switch result {
+	// 	case ResultFinished:
+	// 		c.ResponseChan <- []byte("OK")
+	// 		break
+	// 	case ResultClientDisconnect:
+	// 		c.ResponseChan <- []byte("client disconnected")
+	// 		break
+	// 	case ResultError:
+	// 		c.ResponseChan <- []byte("lpac error")
+	// 		break
+	// 	}
+	// }
 
 	err := c.UnlockAPDU()
 	if err != nil {
@@ -256,7 +243,7 @@ func (c *RLPAClient) Close(result int) {
 	c.Socket = nil
 }
 
-func (c *RLPAClient) processOpenLpac(args []string) error {
+func (c *RLPAClient) processOpenLpac(args ...string) error {
 	// TODO
 	err := c.LockAPDU()
 	if err != nil {
@@ -264,8 +251,7 @@ func (c *RLPAClient) processOpenLpac(args []string) error {
 	}
 	c.CMD = exec.Command(CFG.LpacPath, args...)
 	c.CMD.Env = []string{
-		"APDU_INTERFACE=" + CFG.APDUInterface,
-		"HTTP_INTERFACE=" + CFG.HTTPInterface,
+		"LPAC_APDU=stdio",
 	}
 	// 连接 stdio
 	c.LpacStdin, err = c.CMD.StdinPipe()
@@ -294,7 +280,6 @@ func (c *RLPAClient) processOpenLpac(args []string) error {
 			}
 		}
 	}()
-	// stderr 和 stdout 处理函数如果遇到结果将发送给 responseChan
 	go func() {
 		errStdout := c.OnLpacStdout()
 		if errStdout != nil {
@@ -361,13 +346,11 @@ func (c *RLPAClient) OnLpacStdout() error {
 			}
 		case "lpa":
 			c.DebugLog("run lpac finished")
-			// 完成，发送结果 json
-			if c.ResponseWaiting {
-				c.ResponseChan <- line
-			}
+			c.WorkMode.OnProcessFinished(c, &req.Payload)
 			return nil
 		default:
-			return errors.New("undefined output struct")
+			// 一般是 type: process
+			break
 		}
 	}
 	return nil
@@ -376,10 +359,11 @@ func (c *RLPAClient) OnLpacStdout() error {
 func (c *RLPAClient) OnLpacStderr() {
 	scanner := bufio.NewScanner(c.LpacStderr)
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		if c.ResponseWaiting {
-			c.ResponseChan <- line
-		}
+		line := scanner.Text()
+		// if c.ResponseWaiting {
+		// 	c.ResponseChan <- line
+		// }
+		c.ErrLog(line)
 		c.Close(ResultError)
 		return
 	}
@@ -409,7 +393,7 @@ func (c *RLPAClient) StartOrResetTimer() {
 func (c *RLPAClient) DisconnectAPI() {
 	// TODO
 	if c.ResponseWaiting {
-		c.ResponseChan <- []byte("timeout")
+		// c.ResponseChan <- []byte("timeout")
 	}
 	c.APILocked = false
 }
@@ -423,7 +407,7 @@ func (c *RLPAClient) DebugLogWriteLpacStdin(data []byte) {
 }
 
 func (c *RLPAClient) DebugLogReadLpacStdout(data []byte) {
-	slog.Debug("Read lpac stdin "+string(data), "client", c.RemoteAddr())
+	slog.Debug("Read lpac stdout "+string(data), "client", c.RemoteAddr())
 }
 
 func (c *RLPAClient) InfoLog(msg string) {
