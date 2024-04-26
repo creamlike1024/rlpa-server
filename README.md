@@ -1,8 +1,8 @@
 # rlpa-server
 
-Another go implement of estk.me [rlpa-server.php](https://github.com/estkme-group/lpac/blob/main/src/rlpa-server.php)
+Another go implement of estk.me [rlpa-server.php](https://github.com/estkme-group/lpac/blob/main/src/rlpa-server.php)(estk.me Cloud Enhance server)
 
-- [x] Download Profile (not tested yet)
+- [x] Download Profile
 - [x] Process Notification (consistent with the behavior of `rlpa-server.php`, notifications for non "delete" operations will be removed after processing)
 
 Under construction:
